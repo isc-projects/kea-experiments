@@ -31,7 +31,8 @@ enum AttrValueType {
     PW_TYPE_INTEGER,
     PW_TYPE_IPADDR,
     PW_TYPE_IPV6ADDR,
-    PW_TYPE_IPV6PREFIX
+    PW_TYPE_IPV6PREFIX,
+    PW_TYPE_VSA
 };
 
 /// @brief AttrValueType value -> name function.
@@ -57,9 +58,10 @@ public:
     /// @param type attribute type.
     /// @param name attribute name.
     /// @param value_type attribute value type.
+    /// @param vendor vendor id (default 0).
     AttrDef(const uint8_t type, const std::string& name,
-                 const AttrValueType value_type)
-        : type_(type), name_(name), value_type_(value_type) {
+            const AttrValueType value_type, const uint32_t vendor = 0)
+    : type_(type), name_(name), value_type_(value_type), vendor_(vendor) {
     }
 
     /// @brief type.
@@ -70,6 +72,9 @@ public:
 
     /// @brief value_type.
     const AttrValueType value_type_;
+
+    /// @brief vendor id (default 0).
+    const uint32_t vendor_;
 };
 
 /// @brief Shared pointers to Attribute definition.
@@ -78,7 +83,33 @@ typedef boost::shared_ptr<AttrDef> AttrDefPtr;
 /// @brief List of Attribute definitions.
 typedef std::list<AttrDef> AttrDefList;
 
+/// @brief RADIUS attribute aliases.
+class AttrDefAlias {
+public:
+
+    /// @brief Constructor.
+    ///
+    /// @param alias attribute alias name.
+    /// @param name attribute name.
+    /// @param vendor vendor id (default 0).
+    AttrDefAlias(const std::string& alias, const std::string& name,
+                 const uint32_t vendor = 0)
+    : alias_(alias), name_(name), vendor_(vendor) {
+    }
+
+    /// @brief alias.
+    const std::string alias_;
+
+    /// @brief name.
+    const std::string name_;
+
+    /// @brief vendor id (default 0).
+    const uint32_t vendor_;
+};
+
 /// @brief RADIUS integer constant definitions.
+///
+/// Include vendor ids with Vendor-Specific attribute.
 class IntCstDef {
 public:
 
@@ -87,9 +118,10 @@ public:
     /// @param type attribute type.
     /// @param name integer constant name.
     /// @param value integer constant value.
+    /// @param vendor vendor id (default 0).
     IntCstDef(const uint8_t type, const std::string& name,
-              const uint32_t value)
-        : type_(type), name_(name), value_(value) {
+              const uint32_t value, const uint32_t vendor = 0)
+        : type_(type), name_(name), value_(value), vendor_(vendor) {
     }
 
     /// @brief attribute type.
@@ -100,6 +132,9 @@ public:
 
     /// @brief value.
     const uint32_t value_;
+
+    /// @brief vendor id (default 0).
+    const uint32_t vendor_;
 };
 
 /// @brief Shared pointers to Integer constant definition.
@@ -115,23 +150,53 @@ public:
         AttrDefPtr,
         // Start specification of indexes here.
         boost::multi_index::indexed_by<
-            // Hash index for by type.
+            // Hash index for by vendor and type.
             boost::multi_index::hashed_unique<
-                boost::multi_index::member<
-                    AttrDef, const uint8_t, &AttrDef::type_
+                boost::multi_index::composite_key<
+                    AttrDef,
+                    boost::multi_index::member<
+                        AttrDef, const uint32_t, &AttrDef::vendor_
+                    >,
+                    boost::multi_index::member<
+                        AttrDef, const uint8_t, &AttrDef::type_
+                    >
                 >
             >,
-            // Hash index for by name.
+            // Hash index for by vendor and name.
             boost::multi_index::hashed_unique<
-                boost::multi_index::member<
-                    AttrDef, const std::string, &AttrDef::name_
+                boost::multi_index::composite_key<
+                    AttrDef,
+                    boost::multi_index::member<
+                        AttrDef, const uint32_t, &AttrDef::vendor_
+                    >,
+                    boost::multi_index::member<
+                        AttrDef, const std::string, &AttrDef::name_
+                    >
                 >
             >
         >
     > AttrDefContainer;
 
     /// @brief Type of the alias table (alias -> standard name map).
-    typedef std::unordered_map<std::string, std::string> AttrDefAliases;
+    typedef boost::multi_index_container<
+        // This container stores aliases.
+        AttrDefAlias,
+        // Start specification of indexes here.
+        boost::multi_index::indexed_by<
+            // Hash index for by vendor and alias.
+            boost::multi_index::hashed_unique<
+                boost::multi_index::composite_key<
+                    AttrDefAlias,
+                    boost::multi_index::member<
+                        AttrDefAlias, const uint32_t, &AttrDefAlias::vendor_
+                    >,
+                    boost::multi_index::member<
+                        AttrDefAlias, const std::string, &AttrDefAlias::alias_
+                    >
+                >
+            >
+        >
+    > AttrDefAliases;
 
     /// @brief Type of the integer constant definition container.
     typedef boost::multi_index_container<
@@ -139,10 +204,13 @@ public:
         IntCstDefPtr,
         // Start specification of indexes here.
         boost::multi_index::indexed_by<
-            // Hash index for by type and name.
+            // Hash index for by vendor, type and name.
             boost::multi_index::hashed_unique<
                 boost::multi_index::composite_key<
                     IntCstDef,
+                    boost::multi_index::member<
+                        IntCstDef, const uint32_t, &IntCstDef::vendor_
+                    >,
                     boost::multi_index::member<
                         IntCstDef, const uint8_t, &IntCstDef::type_
                     >,
@@ -151,10 +219,13 @@ public:
                     >
                 >
             >,
-            // Hash index for by type and value.
+            // Hash index for by vendor, type and value.
             boost::multi_index::hashed_unique<
                 boost::multi_index::composite_key<
                     IntCstDef,
+                    boost::multi_index::member<
+                        IntCstDef, const uint32_t, &IntCstDef::vendor_
+                    >,
                     boost::multi_index::member<
                         IntCstDef, const uint8_t, &IntCstDef::type_
                     >,
@@ -173,17 +244,20 @@ public:
     /// @return the single instance.
     static AttrDefs& instance();
 
-    /// @brief Get attribute definition by type.
+    /// @brief Get attribute definition by type and vendor.
     ///
     /// @param type type to look for.
+    /// @param vendor vendor id to look for (default 0).
     /// @return pointer to the attribute definition or null.
-    AttrDefPtr getByType(const uint8_t type) const;
+    AttrDefPtr getByType(const uint8_t type, const uint32_t vendor = 0) const;
 
-    /// @brief Get attribute definition by name.
+    /// @brief Get attribute definition by name and vendor.
     ///
     /// @param name name to look for.
+    /// @param vendor vendor id to look for (default 0).
     /// @return pointer to the attribute definition or null.
-    AttrDefPtr getByName(const std::string& name) const;
+    AttrDefPtr getByName(const std::string& name,
+                         const uint32_t vendor = 0) const;
 
     /// @brief Add (or replace) an attribute definition.
     ///
@@ -200,21 +274,26 @@ public:
     /// @brief Get attribute name.
     ///
     /// @param type type to look for.
-    std::string getName(const uint8_t type) const;
+    /// @param vendor vendor id to look for (default 0).
+    std::string getName(const uint8_t type, const uint32_t vendor = 0) const;
 
     /// @brief Get integer constant definition by attribute type and name.
     ///
     /// @param type attribute type.
     /// @param name name to look for.
+    /// @param vendor vendor id to look for (default 0).
     /// @return pointer to the integer constant definition or null.
-    IntCstDefPtr getByName(const uint8_t type, const std::string& name) const;
+    IntCstDefPtr getByName(const uint8_t type, const std::string& name,
+                           const uint32_t vendor = 0) const;
 
     /// @brief Get integer constant definition by attribute type and value.
     ///
     /// @param type attribute type.
     /// @param value value to look for.
+    /// @param vendor vendor id to look for (default 0).
     /// @return pointer to the integer constant definition or null.
-    IntCstDefPtr getByValue(const uint8_t type, const uint32_t value) const;
+    IntCstDefPtr getByValue(const uint8_t type, const uint32_t value,
+                            const uint32_t vendor = 0) const;
 
     /// @brief Add (or replace) an integer constant definition.
     ///
@@ -223,18 +302,26 @@ public:
     /// @brief Read a dictionary from a file.
     ///
     /// Fills attribute and integer constant definition tables from
-    /// a dictionary file.
+    /// a dictionary file. Recursion depth is initialized to 0,
+    /// incremented by includes and limited to 5.
     ///
     /// @param path dictionary file path.
-    void readDictionary(const std::string& path);
+    /// @param vendor reference to the current vendor id.
+    /// @param depth recursion depth.
+    void readDictionary(const std::string& path, uint32_t& vendor,
+                        unsigned int depth = 0);
 
     /// @brief Read a dictionary from an input stream.
     ///
     /// Fills attribute and integer constant definition tables from
-    /// a dictionary input stream.
+    /// a dictionary input stream. Recursion depth is initialized to 0,
+    /// incremented by includes and limited to 5.
     ///
     /// @param is input stream.
-    void readDictionary(std::istream& is);
+    /// @param vendor reference to the current vendor id.
+    /// @param depth recursion depth.
+    void readDictionary(std::istream& is, uint32_t& vendor,
+                        unsigned int depth = 0);
 
     /// @brief Check if a list of standard attribute definitions
     /// are available and correct.
@@ -255,7 +342,10 @@ protected:
     /// @brief Parse a dictionary line.
     ///
     /// @param line line to parse.
-    void parseLine(const std::string& line);
+    /// @param vendor reference to the current vendor id.
+    /// @param depth recursion depth.
+    void parseLine(const std::string& line, uint32_t& vendor,
+                   unsigned int depth);
 
     /// @brief Attribute definition container.
     AttrDefContainer container_;
